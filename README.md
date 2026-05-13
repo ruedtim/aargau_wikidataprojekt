@@ -4,8 +4,10 @@ Erstellt eine Liste der Personen/Musikgruppen aus dem [Wikidata WikiProject Aarg
 
 ## Setup
 
+Benötigt **Python 3.10–3.13** (nicht 3.14 — pyzmq/jupyter haben dort noch Probleme).
+
 ```bash
-python3 -m venv .venv
+/opt/homebrew/bin/python3.13 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 jupyter lab notebook.ipynb
