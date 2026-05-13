@@ -4,7 +4,7 @@ Erstellt eine Liste der Personen/Musikgruppen aus dem [Wikidata WikiProject Aarg
 
 ## Setup
 
-Benötigt **Python 3.10–3.13** (nicht 3.14 — pyzmq/jupyter haben dort noch Probleme).
+Benötigt **Python 3.10–3.13**
 
 ```bash
 /opt/homebrew/bin/python3.13 -m venv .venv
@@ -13,7 +13,7 @@ pip install -e .
 jupyter lab notebook.ipynb
 ```
 
-Im Notebook von oben nach unten die Zellen ausführen. Der Vollabruf gegen swisscovery dauert ca. 5–15 min und cacht alle Rohdaten in `data/swisscovery_hits.json`, sodass Re-Runs schnell sind.
+Im Notebook von oben nach unten die Zellen ausführen. Der Vollabruf gegen swisscovery dauert ca. 30-60 min und cacht alle Rohdaten in `data/swisscovery_hits.json`, sodass Re-Runs schnell sind.
 
 ## Output
 
