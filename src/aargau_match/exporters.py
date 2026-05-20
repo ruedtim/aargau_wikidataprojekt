@@ -19,7 +19,9 @@ CSV_COLUMNS = [
     "qualifies",
     "confidence",
     "requires_review",
+    "review_reason",
     "has_dewiki",
+    "books_thesis",
     "publishers",
     "sample_titles",
     "wikidata_url",
@@ -53,10 +55,10 @@ def to_markdown(df: pd.DataFrame, path: str | Path) -> Path:
     lines = [
         "# Vorschlagsliste neue Wikipedia-Artikel — Aargauer Bibliografie",
         "",
-        f"Stand: automatisch generiert. {len(sub)} Personen mit ≥2 nicht-selbstverlegten Büchern in swisscovery und (noch) ohne dewiki-Artikel.",
+        f"Stand: automatisch generiert. {len(sub)} Personen mit ≥2 nicht-selbstverlegten Treffern in swisscovery, in denen die Person als Autor:in/Schöpfer:in auftritt, und (noch) ohne dewiki-Artikel.",
         "",
-        "| Person | GND | Bücher (non-selfpub) | Confidence | Wikidata | swisscovery |",
-        "|---|---|---:|---|---|---|",
+        "| Person | GND | Bücher (non-selfpub) | Confidence | Review-Grund | Wikidata | swisscovery |",
+        "|---|---|---:|---|---|---|---|",
     ]
     for _, r in sub.iterrows():
         review_mark = " ⚠️" if r["requires_review"] else ""
@@ -68,10 +70,11 @@ def to_markdown(df: pd.DataFrame, path: str | Path) -> Path:
             f"| {gnd_cell} "
             f"| {r['books_non_selfpub']} "
             f"| {r['confidence']} "
+            f"| {r['review_reason'] or '—'} "
             f"| [{r['q_id']}]({r['wikidata_url']}) "
             f"| [Suche]({r['swisscovery_search_url']}) |"
         )
     lines.append("")
-    lines.append("⚠️ = Treffer nur per Namens-Fuzzy-Matching gefunden, manuelle Kontrolle empfohlen.")
+    lines.append("⚠️ = manuelle Kontrolle empfohlen: Treffer nur per Namens-Fuzzy-Matching, oder Rolle ungeprüft (700 ohne Relator-Code), oder genau 2 Treffer ohne GND. Hochschulschriften (MARC 502) und Privatdrucke zählen als Selbstverlag.")
     path.write_text("\n".join(lines), encoding="utf-8")
     return path

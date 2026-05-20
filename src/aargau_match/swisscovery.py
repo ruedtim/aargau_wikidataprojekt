@@ -6,14 +6,25 @@ Endpoint is open (no API key). Returns MARC21-XML.
 from __future__ import annotations
 
 import io
+import re
 import time
+import unicodedata
 from dataclasses import asdict, dataclass
 from typing import Iterable
 
 import requests
 from pymarc import parse_xml_to_array
 
-SRU_BASE = "https://swisscovery.slsp.ch/view/sru/41SLSP_NETWORK"
+# SRU-Endpunkte. Beide tragen $4-Relator-Codes und unterstützen alma.authority_id /
+# alma.creator / alma.mms_materialType (per SRU explain verifiziert, 2026-05).
+# Default "abn" (41SLSP_ABN auf abn.swisscovery.ch): weniger Manifestations-
+# Dubletten. Auf "nz" umschaltbar für breitere Abdeckung.
+ENDPOINTS = {
+    "abn": "https://abn.swisscovery.ch/view/sru/41SLSP_ABN",
+    "nz": "https://swisscovery.slsp.ch/view/sru/41SLSP_NETWORK",
+}
+ACTIVE_ENDPOINT = "abn"
+SRU_BASE = ENDPOINTS[ACTIVE_ENDPOINT]
 PAGE_SIZE = 50
 SAFETY_CAP = 200  # max hits collected per person
 THROTTLE_SECONDS = 0.2
@@ -23,6 +34,66 @@ SRU_NS = {
     "srw": "http://www.loc.gov/zing/srw/",
     "marc": "http://www.loc.gov/MARC21/slim",
 }
+
+# Deutsche Relator-Begriffe ($e) → MARC-Relator-Code. Nur was wir zum
+# Autor:in-/Schöpfer:in-Filter brauchen plus die häufigsten Ausschluss-Rollen.
+RELTERM_DE = {
+    "verfasser": "aut",
+    "verfasserin": "aut",
+    "autor": "aut",
+    "autorin": "aut",
+    "schopfer": "cre",
+    "schopferin": "cre",
+    "komponist": "cmp",
+    "komponistin": "cmp",
+    "illustrator": "ill",
+    "illustratorin": "ill",
+    "kunstler": "art",
+    "kunstlerin": "art",
+    "fotograf": "pht",
+    "fotografin": "pht",
+    "herausgeber": "edt",
+    "herausgeberin": "edt",
+    "ubersetzer": "trl",
+    "ubersetzerin": "trl",
+    "mitwirkende": "ctb",
+    "mitwirkender": "ctb",
+    "interviewer": "ivr",
+    "befragte": "ive",
+    "befragter": "ive",
+    "gefeierte person": "hnr",
+    "gefeierter": "hnr",
+    "widmungsempfanger": "dte",
+    "adressat": "rcp",
+    "adressatin": "rcp",
+}
+
+
+def _strip_accents(s: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c)
+    )
+
+
+def _norm_relator(raw: str) -> str:
+    """$4-Code oder URI → Kleinbuchstaben-Code; deutscher $e-Begriff → Code."""
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    if s.startswith("http"):
+        s = s.rsplit("/", 1)[-1]
+    key = _strip_accents(s.lower()).strip(" .,;:")
+    if key in RELTERM_DE:
+        return RELTERM_DE[key]
+    return key
+
+
+def _norm_title(title: str) -> str:
+    """Für Dedup: lowercase, akzentfrei, ohne Untertitel/Satzzeichen."""
+    t = (title or "").split(" : ", 1)[0]
+    t = _strip_accents(t.lower())
+    t = re.sub(r"[^a-z0-9]+", " ", t)
+    return t.strip()
 
 
 @dataclass
@@ -34,17 +105,17 @@ class BookRecord:
     publisher: str
     isbn: str
     language: str
-    creator_gnds: list[str]   # GNDs from MARC 100$0 / 700$0
+    # Je Creator: {"gnd": str, "tag": "100".., "relators": [code], "name": str}
+    creators: list[dict]
     subject_gnds: list[str]   # GNDs from MARC 600$0
+    is_thesis: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
-def _extract_gnds(field) -> list[str]:
-    """Pull GND IDs out of subfield $0 entries like '(DE-588)118031198'."""
-    if field is None:
-        return []
+def _gnds_in(field) -> list[str]:
+    """GND-IDs aus Subfield $0 ('(DE-588)118031198' oder gnd-URI)."""
     out = []
     for sub in field.get_subfields("0"):
         if not sub:
@@ -55,6 +126,27 @@ def _extract_gnds(field) -> list[str]:
         elif s.startswith("http") and "gnd/" in s:
             out.append(s.rsplit("/", 1)[-1])
     return out
+
+
+def _extract_creators(field, tag: str) -> list[dict]:
+    """Ein Creator-Dict je GND (bzw. eines ohne GND) mit Rollen aus $4/$e."""
+    if field is None:
+        return []
+    relators = sorted(
+        {
+            r
+            for code in ("4", "e")
+            for sub in field.get_subfields(code)
+            if (r := _norm_relator(sub))
+        }
+    )
+    name = (field.get("a") or "").strip(" ,.")
+    gnds = _gnds_in(field)
+    if not gnds:
+        return [{"gnd": "", "tag": tag, "relators": relators, "name": name}]
+    return [
+        {"gnd": g, "tag": tag, "relators": relators, "name": name} for g in gnds
+    ]
 
 
 def _http_get(params: dict, retries: int = 3) -> bytes:
@@ -136,12 +228,15 @@ def _parse_marc(xml_bytes: bytes) -> list[BookRecord]:
             if f008 is not None and f008.data and len(f008.data) >= 38:
                 language = f008.data[35:38]
 
-        creator_gnds: list[str] = []
-        for f in rec.get_fields("100", "110", "111", "700", "710", "711"):
-            creator_gnds.extend(_extract_gnds(f))
+        creators: list[dict] = []
+        for tag in ("100", "110", "111", "700", "710", "711"):
+            for f in rec.get_fields(tag):
+                creators.extend(_extract_creators(f, tag))
         subject_gnds: list[str] = []
         for f in rec.get_fields("600", "610", "611"):
-            subject_gnds.extend(_extract_gnds(f))
+            subject_gnds.extend(_gnds_in(f))
+
+        is_thesis = rec.get("502") is not None
 
         out.append(
             BookRecord(
@@ -152,8 +247,9 @@ def _parse_marc(xml_bytes: bytes) -> list[BookRecord]:
                 publisher=publisher,
                 isbn=isbn,
                 language=language,
-                creator_gnds=creator_gnds,
+                creators=creators,
                 subject_gnds=subject_gnds,
+                is_thesis=is_thesis,
             )
         )
     return out
@@ -217,5 +313,42 @@ def dedup_by_mms(records: Iterable[BookRecord]) -> list[BookRecord]:
         if key in seen:
             continue
         seen.add(key)
+        out.append(r)
+    return out
+
+
+def _first_creator_key(r: BookRecord) -> str:
+    for c in r.creators:
+        if c.get("gnd"):
+            return c["gnd"]
+    for c in r.creators:
+        if c.get("name"):
+            return _strip_accents(c["name"].lower())
+    return _strip_accents((r.author or "").lower())
+
+
+def dedup_works(records: Iterable[BookRecord]) -> list[BookRecord]:
+    """Manifestations-Dubletten zusammenfassen.
+
+    Schlüssel: normalisierter Titel + Jahr + erste:r Creator:in. Zusätzlich
+    werden Records mit identischer ISBN zusammengefasst. MMS-ID nur als
+    Fallback, wenn der Titel fehlt.
+    """
+    seen: set[str] = set()
+    seen_isbn: set[str] = set()
+    out: list[BookRecord] = []
+    for r in records:
+        nt = _norm_title(r.title)
+        key = (
+            f"t|{nt}|{r.year.strip()}|{_first_creator_key(r)}"
+            if nt
+            else f"m|{r.mms_id}"
+        )
+        isbn = (r.isbn or "").strip()
+        if key in seen or (isbn and isbn in seen_isbn):
+            continue
+        seen.add(key)
+        if isbn:
+            seen_isbn.add(isbn)
         out.append(r)
     return out
