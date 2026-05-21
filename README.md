@@ -1,6 +1,6 @@
 # Aargauer Bibliografie × swisscovery — Matching-Liste
 
-Erstellt eine Liste der Personen/Musikgruppen aus dem [Wikidata WikiProject Aargauer Bibliografie](https://www.wikidata.org/wiki/Wikidata:WikiProject_Aargauer_Bibliografie), die in [swisscovery](https://swisscovery.slsp.ch/) mindestens zwei nicht-selbstverlegte Treffer haben, **in denen die Person als Autor:in/Schöpfer:in auftritt** (Rollen-Allow-Liste `aut, cre, cmp, ill`, konfigurierbar in `matching.py`) — als Grundlage für neue Wikipedia-Artikel. Herausgeber:innen-, Beiträger:innen-, Interview-, Adressat:innen- und Subjekt-Rollen zählen nicht. Hochschulschriften (MARC 502) und Privatdrucke gelten als Selbstverlag. Manifestations-Dubletten werden über normalisierten Titel/Jahr/Creator und ISBN zusammengefasst.
+Erstellt eine Liste der Personen/Musikgruppen aus dem [Wikidata WikiProject Aargauer Bibliografie](https://www.wikidata.org/wiki/Wikidata:WikiProject_Aargauer_Bibliografie), die in [swisscovery](https://swisscovery.slsp.ch/) mindestens **zwei verifizierte Autor:innen-/Schöpfer:innen-Treffer** haben (nicht-selbstverlegt) — als Grundlage für neue Wikipedia-Artikel. „Verifiziert" heisst: MARC-Haupteintrag (100/110/111) oder Zusatzeintrag (700/710/711) mit Relator-Code aus der Allow-Liste `aut, cre, cmp, ill` (konfigurierbar in `matching.py`). 700 ohne Relator-Code wird mitgezählt, aber als `books_unverified` separat ausgewiesen und nicht zur Qualifikation gerechnet. Herausgeber:innen-, Beiträger:innen-, Interview-, Adressat:innen- und Subjekt-Rollen zählen nicht. Hochschulschriften (MARC 502) und Privatdrucke gelten als Selbstverlag. Manifestations-Dubletten werden über normalisierten Titel/Jahr/Creator und ISBN zusammengefasst. Für Personen ohne GND (Name-Fuzzy-Pfad) wird MARC `100$d` gegen die Wikidata-Geburts-/Sterbejahre abgeglichen — fehlen Jahresangaben in MARC oder weichen sie ab, wird der Treffer verworfen (Homonym-Schutz).
 
 ## Setup
 
@@ -15,7 +15,7 @@ jupyter lab notebook.ipynb
 
 Im Notebook von oben nach unten die Zellen ausführen. Der Vollabruf gegen swisscovery dauert ca. 30-60 min und cacht alle Rohdaten in `data/swisscovery_hits.json`, sodass Re-Runs schnell sind.
 
-> **Hinweis:** Das Cache-Schema hat sich geändert (Rollen je Creator statt nur GND-Liste). Vor dem nächsten Lauf `data/swisscovery_hits.json` löschen und den Vollabruf einmal neu ausführen.
+> **Hinweis:** Das Cache-Schema enthält jetzt zusätzlich Lebensdaten je Creator (für den Homonym-Schutz). Vor dem nächsten Lauf `data/swisscovery_hits.json` löschen und den Vollabruf einmal neu ausführen — die Notebook-Zelle erkennt das auch automatisch und verwirft alten Cache.
 
 ## Output
 

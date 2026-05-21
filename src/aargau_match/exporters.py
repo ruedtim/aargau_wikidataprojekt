@@ -14,6 +14,8 @@ CSV_COLUMNS = [
     "birth",
     "death",
     "books_total",
+    "books_verified",
+    "books_unverified",
     "books_non_selfpub",
     "books_selfpub",
     "qualifies",
@@ -32,7 +34,7 @@ CSV_COLUMNS = [
 
 def sort_results(df: pd.DataFrame) -> pd.DataFrame:
     return df.sort_values(
-        ["qualifies", "books_non_selfpub", "name"],
+        ["qualifies", "books_verified", "name"],
         ascending=[False, False, True],
     ).reset_index(drop=True)
 
@@ -55,10 +57,10 @@ def to_markdown(df: pd.DataFrame, path: str | Path) -> Path:
     lines = [
         "# Vorschlagsliste neue Wikipedia-Artikel — Aargauer Bibliografie",
         "",
-        f"Stand: automatisch generiert. {len(sub)} Personen mit ≥2 nicht-selbstverlegten Treffern in swisscovery, in denen die Person als Autor:in/Schöpfer:in auftritt, und (noch) ohne dewiki-Artikel.",
+        f"Stand: automatisch generiert. {len(sub)} Personen mit ≥2 verifizierten Autor:innen-/Schöpfer:innen-Treffern in swisscovery (nicht-selbstverlegt) und (noch) ohne dewiki-Artikel.",
         "",
-        "| Person | GND | Bücher (non-selfpub) | Confidence | Review-Grund | Wikidata | swisscovery |",
-        "|---|---|---:|---|---|---|---|",
+        "| Person | GND | Bücher (verifiziert) | + unverifiziert | Confidence | Review-Grund | Wikidata | swisscovery |",
+        "|---|---|---:|---:|---|---|---|---|",
     ]
     for _, r in sub.iterrows():
         review_mark = " ⚠️" if r["requires_review"] else ""
@@ -68,13 +70,16 @@ def to_markdown(df: pd.DataFrame, path: str | Path) -> Path:
         lines.append(
             f"| {r['name']}{review_mark} "
             f"| {gnd_cell} "
-            f"| {r['books_non_selfpub']} "
+            f"| {r['books_verified']} "
+            f"| {r['books_unverified']} "
             f"| {r['confidence']} "
             f"| {r['review_reason'] or '—'} "
             f"| [{r['q_id']}]({r['wikidata_url']}) "
             f"| [Suche]({r['swisscovery_search_url']}) |"
         )
     lines.append("")
-    lines.append("⚠️ = manuelle Kontrolle empfohlen: Treffer nur per Namens-Fuzzy-Matching, oder Rolle ungeprüft (700 ohne Relator-Code), oder genau 2 Treffer ohne GND. Hochschulschriften (MARC 502) und Privatdrucke zählen als Selbstverlag.")
+    lines.append("Qualifikations-Schwelle: ≥2 Bücher mit verifizierter Autor:innen-/Schöpfer:innen-Rolle (Relator-Code in 100/700: aut/cre/cmp/ill). Hochschulschriften (MARC 502) und Privatdrucke zählen als Selbstverlag.")
+    lines.append("")
+    lines.append("⚠️ = manuelle Kontrolle empfohlen: nur per Namens-Fuzzy gefunden, oder genau 2 verifizierte ohne GND.")
     path.write_text("\n".join(lines), encoding="utf-8")
     return path

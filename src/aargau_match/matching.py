@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from rapidfuzz import fuzz
@@ -54,6 +55,53 @@ def is_self_published(book: BookRecord) -> bool:
     return any(needle in p for needle in SELFPUB_PUBLISHERS)
 
 
+_YEAR_RE = re.compile(r"\b(1[5-9]\d{2}|20\d{2})\b")
+
+
+def _years_in(s: str) -> set[int]:
+    """Alle plausiblen Jahreszahlen aus z. B. '1928-2010', '*1928', 'ca. 1850-1920'."""
+    return {int(y) for y in _YEAR_RE.findall(s or "")}
+
+
+def _wd_year(s: str) -> int | None:
+    """Wikidata-Datum ('1928-05-19T00:00:00Z' / '+1928' / '1928') → Jahr."""
+    if not s:
+        return None
+    m = re.match(r"^[+-]?(\d{4})", str(s).strip())
+    return int(m.group(1)) if m else None
+
+
+def wikidata_years(person: dict) -> set[int]:
+    out: set[int] = set()
+    for k in ("birth", "death"):
+        y = _wd_year(str(person.get(k) or ""))
+        if y:
+            out.add(y)
+    return out
+
+
+def dates_match(creator_dates: str, wd_years: set[int]) -> bool:
+    """True, wenn MARC $d ein Jahr enthält, das zu Wikidata passt.
+
+    Fallback (kein wd_years bekannt): True. Wikidata-Jahre da, aber MARC $d
+    leer oder ohne Jahresangabe: False — kein positiver Beleg = ablehnen.
+    Wenn $d eine Lebensspanne enthält, wird auch das Enthaltensein eines
+    Wikidata-Jahres im Intervall akzeptiert (toleriert ±0).
+    """
+    if not wd_years:
+        return True
+    yrs = _years_in(creator_dates)
+    if not yrs:
+        return False
+    if yrs & wd_years:
+        return True
+    if len(yrs) >= 2:
+        lo, hi = min(yrs), max(yrs)
+        if any(lo <= y <= hi for y in wd_years):
+            return True
+    return False
+
+
 def name_matches(book_author: str, given: str, family: str) -> bool:
     """Fuzzy compare a MARC author string ('Family, Given' or 'Given Family') to expected name."""
     if not book_author:
@@ -77,6 +125,8 @@ class PersonResult:
     death: str
     books_total: int
     books_non_selfpub: int
+    books_verified: int
+    books_unverified: int
     books_selfpub: int
     qualifies: bool
     confidence: str  # "gnd" | "name-fuzzy"
@@ -107,13 +157,18 @@ def _swisscovery_search_url(family: str, given: str, gnd: str) -> str:
 
 
 def classify_authorship(
-    book: BookRecord, person_gnd: str, given: str, family: str
+    book: BookRecord,
+    person_gnd: str,
+    given: str,
+    family: str,
+    wd_years: set[int] | None = None,
 ) -> tuple[bool, bool]:
-    """(zählt_als_autorenwerk, rolle_ungeprüft) für eine Person je Buch.
+    """(zählt_als_autorenwerk, rolle_verifiziert) für eine Person je Buch.
 
-    Haupteintrag (100/110/111) zählt, ausser die einzigen Relatoren sind
-    eindeutig Nicht-Autor. Zusatzeintrag (700/710/711) zählt nur mit
-    Autor:innen-Relator; ohne jeden Relator zählt er, aber als ungeprüft.
+    Haupteintrag (100/110/111) zählt verifiziert, ausser die einzigen Relatoren
+    sind eindeutig Nicht-Autor. Zusatzeintrag (700/710/711) zählt verifiziert
+    nur mit Autor:innen-Relator; ohne jeden Relator zählt er, aber unverifiziert.
+    Bei Name-Fuzzy ohne GND wird zusätzlich `100$d` gegen Wikidata-Jahre geprüft.
     """
     matched = []
     for c in book.creators:
@@ -121,10 +176,13 @@ def classify_authorship(
             if c.get("gnd") == person_gnd:
                 matched.append(c)
         elif given or family:
-            if name_matches(c.get("name") or book.author, given, family):
-                matched.append(c)
+            if not name_matches(c.get("name") or book.author, given, family):
+                continue
+            if wd_years and not dates_match(c.get("dates", ""), wd_years):
+                continue
+            matched.append(c)
     if not person_gnd and not (given or family):
-        return True, False
+        return True, True
     if not matched:
         return False, False
 
@@ -145,7 +203,7 @@ def classify_authorship(
                     verified = True
             else:
                 counts = True
-    return counts, (counts and not verified)
+    return counts, verified
 
 
 def build_person_result(
@@ -173,30 +231,33 @@ def build_person_result(
 
     # Nur Treffer behalten, in denen die Person als Autor:in/Schöpfer:in
     # auftritt (Rollen-Allow-Liste); Subjekt-/Herausgeber-/Adressat-Rollen raus.
+    # Bei Name-Fuzzy ohne GND zusätzlich Jahresabgleich 100$d ↔ Wikidata.
     books = dedup_works(raw_books)
-    role_unverified = False
+    wd_years = wikidata_years(person)
     authored: list[BookRecord] = []
+    verified_books: list[BookRecord] = []
     for b in books:
-        counts, unverified = classify_authorship(b, gnd, given, family)
+        counts, verified = classify_authorship(b, gnd, given, family, wd_years)
         if counts:
             authored.append(b)
-            role_unverified = role_unverified or unverified
+            if verified:
+                verified_books.append(b)
 
     selfpub = [b for b in authored if is_self_published(b)]
     non_self = [b for b in authored if not is_self_published(b)]
+    verified_ns = [b for b in verified_books if not is_self_published(b)]
     n_thesis = sum(1 for b in authored if b.is_thesis)
-    qualifies = len(non_self) >= 2
+    qualifies = len(verified_ns) >= 2
 
     publishers = sorted({b.publisher for b in authored if b.publisher})
-    sample_titles = [b.title for b in non_self[:5] if b.title]
+    sample_pool = verified_ns or non_self
+    sample_titles = [b.title for b in sample_pool[:5] if b.title]
 
     reasons = []
     if confidence == "name-fuzzy":
-        reasons.append("name-fuzzy")
-    if role_unverified:
-        reasons.append("rolle-ungeprüft (700 ohne Relator)")
-    if qualifies and len(non_self) == 2 and not gnd:
-        reasons.append("genau 2, ohne GND")
+        reasons.append("name-fuzzy" + ("" if wd_years else " (keine Wikidata-Jahre)"))
+    if qualifies and len(verified_ns) == 2 and not gnd:
+        reasons.append("genau 2 verifizierte, ohne GND")
     review_reason = "; ".join(reasons)
     requires_review = bool(reasons)
 
@@ -209,6 +270,8 @@ def build_person_result(
         death=person.get("death", ""),
         books_total=len(authored),
         books_non_selfpub=len(non_self),
+        books_verified=len(verified_ns),
+        books_unverified=len(non_self) - len(verified_ns),
         books_selfpub=len(selfpub),
         qualifies=qualifies,
         confidence=confidence,

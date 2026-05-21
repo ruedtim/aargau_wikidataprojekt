@@ -141,11 +141,13 @@ def _extract_creators(field, tag: str) -> list[dict]:
         }
     )
     name = (field.get("a") or "").strip(" ,.")
+    dates = (field.get("d") or "").strip(" ,.()[]")
     gnds = _gnds_in(field)
     if not gnds:
-        return [{"gnd": "", "tag": tag, "relators": relators, "name": name}]
+        return [{"gnd": "", "tag": tag, "relators": relators, "name": name, "dates": dates}]
     return [
-        {"gnd": g, "tag": tag, "relators": relators, "name": name} for g in gnds
+        {"gnd": g, "tag": tag, "relators": relators, "name": name, "dates": dates}
+        for g in gnds
     ]
 
 
